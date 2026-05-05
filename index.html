@@ -183,26 +183,37 @@
 
   /* FLOATING TIME INDICATOR */
   #time-indicator {
-    position: fixed; left: 0; width: 52px;
-    display: flex; align-items: center; justify-content: center;
+    position: fixed; left: 0; right: 0;
+    display: flex; align-items: center;
     pointer-events: none; z-index: 20;
-    transition: top 0.5s cubic-bezier(0.25, 0.8, 0.25, 1);
+    will-change: transform;
   }
   #time-needle {
     position: relative; display: flex; align-items: center;
+    width: 100%;
   }
-  #time-needle::before {
+  #time-label {
+    position: absolute; left: 4px;
+    font-family: var(--font-mono); font-size: 10px; font-weight: 500;
+    color: var(--accent); letter-spacing: -0.01em;
+    top: -16px; white-space: nowrap;
+    opacity: 0.9;
+  }
+  #time-needle::after {
     content: ''; position: absolute;
-    left: 100%; top: 50%; transform: translateY(-50%);
-    width: calc(100vw + 52px); height: 1px;
+    left: 52px; top: 50%; transform: translateY(-50%);
+    width: calc(100% - 52px); height: 1px;
     background: linear-gradient(to right, var(--accent), transparent);
     opacity: 0.4;
   }
   #time-dot {
+    position: absolute; left: 44px;
     width: 8px; height: 8px; border-radius: 50%;
     background: var(--accent);
     box-shadow: 0 0 0 2px var(--bg), 0 0 0 3px var(--accent);
     animation: pulse 2s ease-in-out infinite;
+    transform: translateY(-50%);
+    top: 50%;
   }
   @keyframes pulse {
     0%, 100% { box-shadow: 0 0 0 2px var(--bg), 0 0 0 3px var(--accent); }
@@ -334,6 +345,7 @@
   <div id="stats-display">
     <div class="stat-pill green"><span class="stat-dot"></span><span id="stat-done">0</span></div>
     <div class="stat-pill red"><span class="stat-dot"></span><span id="stat-miss">0</span></div>
+    <div class="stat-pill" id="stat-day-pct" style="background:var(--surface2);color:var(--text-muted);font-family:var(--font-mono);font-size:11px;">0%</div>
   </div>
 </div>
 
@@ -343,6 +355,7 @@
 
 <div id="time-indicator">
   <div id="time-needle">
+    <div id="time-label">00:00</div>
     <div id="time-dot"></div>
   </div>
 </div>
@@ -605,7 +618,26 @@ function updateTimeIndicator() {
   const posInDay = (h + m / 60) * hourHeight;
   const screenPos = posInDay - scrollTop + headerH;
 
-  ind.style.top = (screenPos - 4) + 'px';
+  // Usar transform em vez de top para evitar reflow e jitter ao rolar
+  ind.style.transform = `translateY(${screenPos - 4}px)`;
+  ind.style.top = '0px';
+
+  // Atualizar o label de hora atual (fix 3)
+  const label = document.getElementById('time-label');
+  if (label) {
+    const hStr = h.toString().padStart(2, '0');
+    const mStr = m.toString().padStart(2, '0');
+    label.textContent = state.settings.format24
+      ? `${hStr}:${mStr}`
+      : (() => { const ampm = h < 12 ? 'AM' : 'PM'; const h12 = h % 12 || 12; return `${h12}:${mStr} ${ampm}`; })();
+  }
+
+  // Atualizar porcentagem do dia (fix 2)
+  const totalMinutes = 24 * 60;
+  const elapsedMinutes = h * 60 + m;
+  const pct = Math.min(100, Math.round((elapsedMinutes / totalMinutes) * 100));
+  const pctEl = document.getElementById('stat-day-pct');
+  if (pctEl) pctEl.textContent = pct + '%';
 }
 
 function getHourHeight() {
@@ -835,7 +867,7 @@ function checkReset() {
 
 // ── EVENTS ─────────────────────────────────────────────────────────────────
 document.getElementById('settings-btn').addEventListener('click', openSettingsSheet);
-document.getElementById('scroll-area').addEventListener('scroll', updateTimeIndicator);
+document.getElementById('scroll-area').addEventListener('scroll', updateTimeIndicator, { passive: true });
 
 // ── INIT & TICK ────────────────────────────────────────────────────────────
 load();
