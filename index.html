@@ -456,6 +456,43 @@
     z-index: 15;
     transition: top 0.3s ease;
   }
+
+  /* ── NOTIFICATIONS SETTINGS ─────────────────────────────────────────────── */
+  .notif-section-label {
+    font-size: 11px; color: var(--text-dim); font-family: var(--font-mono);
+    text-transform: uppercase; letter-spacing: 0.08em;
+    margin: 16px 0 4px;
+  }
+  .notif-time-row {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 0; border-bottom: 1px solid var(--border);
+    gap: 12px;
+  }
+  .notif-time-row:last-child { border-bottom: none; }
+  .notif-time-input {
+    background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 8px; padding: 7px 10px;
+    font-size: 14px; color: var(--text); font-family: var(--font-mono);
+    outline: none; width: 96px; text-align: center;
+    transition: border-color 0.2s;
+  }
+  .notif-time-input:focus { border-color: var(--accent); }
+  .notif-perm-btn {
+    width: 100%; padding: 11px 14px; border-radius: 10px;
+    font-size: 13px; font-family: var(--font-mono); cursor: pointer;
+    border: 1px solid var(--border); background: var(--surface2);
+    color: var(--text); text-align: center; transition: all 0.15s;
+    margin-top: 6px;
+  }
+  .notif-perm-btn:hover { background: var(--border); }
+  .notif-perm-btn.granted { border-color: rgba(74,222,128,0.3); color: var(--green); background: var(--green-dim); }
+  .notif-perm-btn.denied  { border-color: rgba(248,113,113,0.3); color: var(--red); background: var(--red-dim); }
+  .notif-auto-badge {
+    font-size: 10px; font-family: var(--font-mono);
+    padding: 2px 7px; border-radius: 10px;
+    background: var(--accent-dim); color: var(--accent);
+    margin-left: 6px; white-space: nowrap;
+  }
 </style>
 </head>
 <body>
@@ -509,6 +546,12 @@ let state = {
     minuteMode: false,
     theme: 'dark',
     accentColor: 'amber',
+    notifEnabled: false,
+    notifWakeHour: 7,
+    notifWakeMin: 0,
+    notifSleepHour: 22,
+    notifSleepMin: 30,
+    notifAutoSchedule: true,
   },
   date: todayStr(),
 };
@@ -1119,6 +1162,63 @@ function openSettingsSheet() {
         sw.classList.add('active');
         save(); applyTheme();
       });
+
+      // ── NOTIFICATION TOGGLES ──
+      document.getElementById('toggle-notif').addEventListener('click', async () => {
+        if (!state.settings.notifEnabled) {
+          // Request permission first
+          const granted = await requestNotifPermission();
+          if (!granted) return;
+        }
+        state.settings.notifEnabled = !state.settings.notifEnabled;
+        document.getElementById('toggle-notif').classList.toggle('on', state.settings.notifEnabled);
+        const cfg = document.getElementById('notif-config');
+        if (cfg) cfg.style.display = state.settings.notifEnabled ? '' : 'none';
+        save();
+        scheduleNotifications();
+      });
+
+      const autoToggle = document.getElementById('toggle-notif-auto');
+      if (autoToggle) {
+        autoToggle.addEventListener('click', () => {
+          state.settings.notifAutoSchedule = !state.settings.notifAutoSchedule;
+          autoToggle.classList.toggle('on', state.settings.notifAutoSchedule);
+          const manualDiv = document.getElementById('notif-manual-times');
+          if (manualDiv) manualDiv.style.display = state.settings.notifAutoSchedule ? 'none' : '';
+          save();
+          scheduleNotifications();
+        });
+      }
+
+      const wakeInput = document.getElementById('notif-wake-time');
+      if (wakeInput) {
+        wakeInput.addEventListener('change', () => {
+          const [h, m] = wakeInput.value.split(':').map(Number);
+          state.settings.notifWakeHour = h;
+          state.settings.notifWakeMin = m;
+          save(); scheduleNotifications();
+        });
+      }
+
+      const sleepInput = document.getElementById('notif-sleep-time');
+      if (sleepInput) {
+        sleepInput.addEventListener('change', () => {
+          const [h, m] = sleepInput.value.split(':').map(Number);
+          state.settings.notifSleepHour = h;
+          state.settings.notifSleepMin = m;
+          save(); scheduleNotifications();
+        });
+      }
+
+      const permBtn = document.getElementById('notif-perm-btn');
+      if (permBtn) {
+        permBtn.addEventListener('click', async () => {
+          await requestNotifPermission();
+          // update button state
+          permBtn.className = 'notif-perm-btn ' + getNotifPermClass();
+          permBtn.textContent = getNotifPermLabel();
+        });
+      }
     }
   });
 }
@@ -1258,12 +1358,255 @@ document.getElementById('stats-btn').addEventListener('click', openStatsSheet);
 document.getElementById('sleep-btn').addEventListener('click', handleSleepToggle);
 document.getElementById('scroll-area').addEventListener('scroll', updateTimeIndicator, { passive: true });
 
+// ── NOTIFICATION ENGINE ────────────────────────────────────────────────────
+
+function getNotifPermClass() {
+  if (!('Notification' in window)) return 'denied';
+  if (Notification.permission === 'granted') return 'granted';
+  if (Notification.permission === 'denied') return 'denied';
+  return '';
+}
+
+function getNotifPermLabel() {
+  if (!('Notification' in window)) return 'Notificações não suportadas';
+  if (Notification.permission === 'granted') return '✓ Permissão concedida';
+  if (Notification.permission === 'denied') return '✗ Permissão bloqueada — habilite nas config. do navegador';
+  return 'Conceder permissão para notificações';
+}
+
+async function requestNotifPermission() {
+  if (!('Notification' in window)) return false;
+  if (Notification.permission === 'granted') return true;
+  if (Notification.permission === 'denied') {
+    showToast('habilite notificações no navegador');
+    return false;
+  }
+  const result = await Notification.requestPermission();
+  return result === 'granted';
+}
+
+// ── AUDIO ENGINE (Web Audio API) ───────────────────────────────────────────
+let _audioCtx = null;
+function getAudioCtx() {
+  if (!_audioCtx) _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  return _audioCtx;
+}
+
+// Som discreto para tarefas durante o dia
+function playDaySound() {
+  try {
+    const ctx = getAudioCtx();
+    const t = ctx.currentTime;
+    // Dois pings suaves
+    [0, 0.18].forEach(offset => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(880, t + offset);
+      osc.frequency.exponentialRampToValueAtTime(660, t + offset + 0.12);
+      gain.gain.setValueAtTime(0.0001, t + offset);
+      gain.gain.exponentialRampToValueAtTime(0.28, t + offset + 0.01);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t + offset + 0.14);
+      osc.start(t + offset); osc.stop(t + offset + 0.15);
+    });
+  } catch(e) {}
+}
+
+// Som de alarme para acordar/dormir — mais intenso, tipo despertador
+function playAlarmSound() {
+  try {
+    const ctx = getAudioCtx();
+    const t = ctx.currentTime;
+    // Sequência ascendente de 4 notas — chamativo
+    const notes = [523, 659, 784, 1047]; // C5, E5, G5, C6
+    notes.forEach((freq, i) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(freq, t + i * 0.13);
+      gain.gain.setValueAtTime(0.0001, t + i * 0.13);
+      gain.gain.exponentialRampToValueAtTime(0.45, t + i * 0.13 + 0.01);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t + i * 0.13 + 0.11);
+      osc.start(t + i * 0.13); osc.stop(t + i * 0.13 + 0.12);
+    });
+    // Echo depois de 0.7s
+    setTimeout(() => {
+      try {
+        const ctx2 = getAudioCtx();
+        const t2 = ctx2.currentTime;
+        const notes2 = [659, 784, 1047, 1319];
+        notes2.forEach((freq, i) => {
+          const osc = ctx2.createOscillator();
+          const gain = ctx2.createGain();
+          osc.connect(gain); gain.connect(ctx2.destination);
+          osc.type = 'triangle';
+          osc.frequency.setValueAtTime(freq, t2 + i * 0.13);
+          gain.gain.setValueAtTime(0.0001, t2 + i * 0.13);
+          gain.gain.exponentialRampToValueAtTime(0.5, t2 + i * 0.13 + 0.01);
+          gain.gain.exponentialRampToValueAtTime(0.0001, t2 + i * 0.13 + 0.11);
+          osc.start(t2 + i * 0.13); osc.stop(t2 + i * 0.13 + 0.12);
+        });
+      } catch(e) {}
+    }, 700);
+  } catch(e) {}
+}
+
+// ── COMPUTE SMART WAKE/SLEEP TIMES FROM HISTORY ────────────────────────────
+function computeSmartTimes() {
+  const sessions = sleepState.sessions;
+  // Use last 2 valid sessions
+  const valid = sessions.filter(s => {
+    const v = sleepValidate(s);
+    return v.status === 'valid' || v.status === 'suspicious';
+  }).slice(-2);
+
+  if (valid.length === 0) {
+    // Default
+    return {
+      wakeH: state.settings.notifWakeHour,
+      wakeM: state.settings.notifWakeMin,
+      sleepH: state.settings.notifSleepHour,
+      sleepM: state.settings.notifSleepMin,
+    };
+  }
+
+  // Average wake times (end of session) and sleep times (start of session)
+  const wakeTimes = valid.map(s => {
+    const d = new Date(s.end);
+    return d.getHours() * 60 + d.getMinutes();
+  });
+  const sleepTimes = valid.map(s => {
+    const d = new Date(s.start);
+    return d.getHours() * 60 + d.getMinutes();
+  });
+
+  const avgWake = Math.round(wakeTimes.reduce((a,b)=>a+b,0)/wakeTimes.length);
+  const avgSleep = Math.round(sleepTimes.reduce((a,b)=>a+b,0)/sleepTimes.length);
+
+  return {
+    wakeH: Math.floor(avgWake / 60),
+    wakeM: avgWake % 60,
+    sleepH: Math.floor(avgSleep / 60),
+    sleepM: avgSleep % 60,
+  };
+}
+
+// ── SHOW NOTIFICATION (via SW or fallback) ─────────────────────────────────
+async function showNotification(title, body, { alarm = false, tag = 'today' } = {}) {
+  if (!state.settings.notifEnabled) return;
+  if (!('Notification' in window) || Notification.permission !== 'granted') return;
+
+  // Play audio
+  if (alarm) playAlarmSound(); else playDaySound();
+
+  // Show via service worker if available (supports vibration)
+  if ('serviceWorker' in navigator) {
+    const reg = await navigator.serviceWorker.ready;
+    if (reg && reg.active) {
+      reg.active.postMessage({ type: 'SHOW_NOTIFICATION', title, body, tag, alarm });
+      return;
+    }
+  }
+
+  // Fallback — direct Notification API
+  try {
+    new Notification(title, { body, icon: './icon-192.png', tag, silent: false });
+  } catch(e) {}
+}
+
+// ── TASK HOUR NOTIFICATION CHECK ───────────────────────────────────────────
+// Called every minute to check if we just entered an hour with tasks
+let _lastNotifHour = -1;
+
+function checkHourlyNotification() {
+  if (!state.settings.notifEnabled) return;
+  const d = new Date();
+  const h = d.getHours();
+  const m = d.getMinutes();
+
+  // Only fire at :00 of each hour (within the first 2 minutes to account for timer drift)
+  if (m > 1) return;
+  if (h === _lastNotifHour) return;
+
+  const tasks = state.tasks[h] || [];
+  const pending = tasks.filter(t => !t.done);
+  if (pending.length === 0) return;
+
+  _lastNotifHour = h;
+  const taskList = pending.map(t => '· ' + t.text).join('\n');
+  const label = pending.length === 1 ? '1 tarefa agora' : `${pending.length} tarefas agora`;
+  showNotification('⏰ ' + formatHour(h), label + '\n' + taskList, { alarm: false, tag: 'today-tasks-' + h });
+}
+
+// ── WAKE / SLEEP REMINDER CHECK ────────────────────────────────────────────
+let _lastWakeNotif = '';
+let _lastSleepNotif = '';
+
+function checkSleepWakeNotification() {
+  if (!state.settings.notifEnabled) return;
+  const d = new Date();
+  const h = d.getHours();
+  const m = d.getMinutes();
+  const todayKey = new Date().toDateString();
+
+  const times = state.settings.notifAutoSchedule ? computeSmartTimes() : {
+    wakeH: state.settings.notifWakeHour,
+    wakeM: state.settings.notifWakeMin,
+    sleepH: state.settings.notifSleepHour,
+    sleepM: state.settings.notifSleepMin,
+  };
+
+  // Wake notification (fire within 2-min window)
+  const wakeKey = todayKey + '-wake';
+  if (h === times.wakeH && m >= times.wakeM && m <= times.wakeM + 2 && _lastWakeNotif !== wakeKey) {
+    _lastWakeNotif = wakeKey;
+    // 15-min heads-up before ideal wake (fire when sleeping is still true)
+    const notifMsg = sleepState.sleeping
+      ? 'Hora de acordar! Marque que você acordou 🌅'
+      : 'Bom dia! Que tal planejar o seu dia? ☀';
+    showNotification('Today — Bom dia', notifMsg, { alarm: true, tag: 'today-wake' });
+  }
+
+  // Sleep notification: send 15 min before sleep time
+  const sleepNotifH = times.sleepH;
+  const sleepNotifM = times.sleepM >= 15 ? times.sleepM - 15 : times.sleepM + 45;
+  const sleepNotifHAdj = times.sleepM >= 15 ? sleepNotifH : (sleepNotifH - 1 + 24) % 24;
+  const sleepKey = todayKey + '-sleep';
+
+  if (h === sleepNotifHAdj && m >= sleepNotifM && m <= sleepNotifM + 2 && _lastSleepNotif !== sleepKey) {
+    _lastSleepNotif = sleepKey;
+    const notifMsg = sleepState.sleeping
+      ? 'Você já está dormindo. Boas noites! 🌙'
+      : 'Quase hora de dormir. Prepare-se para descansar 🌙';
+    showNotification('Today — Boa noite', notifMsg, { alarm: true, tag: 'today-sleep' });
+  }
+}
+
+// ── SCHEDULE LOOP ──────────────────────────────────────────────────────────
+let _notifInterval = null;
+
+function scheduleNotifications() {
+  if (_notifInterval) { clearInterval(_notifInterval); _notifInterval = null; }
+  if (!state.settings.notifEnabled) return;
+  // Check every minute
+  _notifInterval = setInterval(() => {
+    checkHourlyNotification();
+    checkSleepWakeNotification();
+  }, 60000);
+  // Also run immediately (catches the current minute if relevant)
+  checkHourlyNotification();
+  checkSleepWakeNotification();
+}
+
 // ── INIT & TICK ────────────────────────────────────────────────────────────
 load();
 sleepLoad();
 render();
 renderSleepBtn();
 scrollToCurrent();
+scheduleNotifications();
 
 // tick every 30s
 setInterval(() => {

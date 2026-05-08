@@ -1,15 +1,5 @@
-const CACHE = 'today-planner-v1';
+const CACHE = 'today-planner-v2';
 
-const ASSETS = [
-  './',
-  './index.html',
-  './manifest.json',
-  './icon-192.png',
-  './icon-512.png',
-  'https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,300&family=Syne:wght@400;500;600;700;800&display=swap',
-];
-
-// Install: pre-cache local assets (fonts são cacheados no fetch)
 self.addEventListener('install', e => {
   e.waitUntil(
     caches.open(CACHE).then(cache =>
@@ -18,7 +8,6 @@ self.addEventListener('install', e => {
   );
 });
 
-// Activate: limpa caches antigos
 self.addEventListener('activate', e => {
   e.waitUntil(
     caches.keys().then(keys =>
@@ -27,11 +16,9 @@ self.addEventListener('activate', e => {
   );
 });
 
-// Fetch: cache-first para assets locais, network-first para Google Fonts
 self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);
 
-  // Google Fonts: stale-while-revalidate
   if (url.hostname.includes('fonts.g') || url.hostname.includes('fonts.googleapis')) {
     e.respondWith(
       caches.open(CACHE).then(cache =>
@@ -47,7 +34,6 @@ self.addEventListener('fetch', e => {
     return;
   }
 
-  // Assets locais: cache-first
   if (url.origin === self.location.origin) {
     e.respondWith(
       caches.match(e.request).then(cached => {
@@ -60,4 +46,36 @@ self.addEventListener('fetch', e => {
       })
     );
   }
+});
+
+// Recebe mensagem do main thread para mostrar notificação
+self.addEventListener('message', e => {
+  if (!e.data || e.data.type !== 'SHOW_NOTIFICATION') return;
+  const { title, body, tag, alarm } = e.data;
+  e.waitUntil(
+    self.registration.showNotification(title, {
+      body,
+      tag: tag || 'today-notif',
+      icon: './icon-192.png',
+      badge: './icon-192.png',
+      silent: false,
+      vibrate: alarm
+        ? [400, 100, 400, 100, 400, 100, 600]
+        : [150, 80, 150],
+      requireInteraction: false,
+      data: { url: './' }
+    })
+  );
+});
+
+self.addEventListener('notificationclick', e => {
+  e.notification.close();
+  e.waitUntil(
+    clients.matchAll({ type: 'window', includeUncontrolled: true }).then(list => {
+      for (const c of list) {
+        if (c.url.includes('index.html') || c.url.endsWith('/')) return c.focus();
+      }
+      return clients.openWindow('./');
+    })
+  );
 });
